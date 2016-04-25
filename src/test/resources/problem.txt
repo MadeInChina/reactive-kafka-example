@@ -1,0 +1,1 @@
+java.lang.IllegalArgumentException: Either topics or assignments must be defined, both of them were defined: $settings
