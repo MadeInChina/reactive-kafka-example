@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.kafka.scaladsl.Consumer.{Committable, CommittableMessage}
 import akka.kafka.scaladsl.{Producer, Consumer}
 import akka.kafka.{ConsumerSettings, ProducerSettings}
-import akka.stream.{SinkShape, ClosedShape, ActorMaterializer}
+import akka.stream.{OverflowStrategy, SinkShape, ClosedShape, ActorMaterializer}
 import akka.stream.scaladsl.{Flow, GraphDSL, RunnableGraph, Sink}
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.clients.producer.ProducerRecord
@@ -67,12 +67,13 @@ object ConsumerGraphExample extends App{
     type In = Consumer.CommittableMessage[Array[Byte], String]
 
     val src = Consumer.committableSource(settings.withClientId("client" + id))
+    src.buffer(1000, OverflowStrategy.backpressure)
     val commit = Flow[In].mapAsync(1) { msg =>
 
       Future {
 
         syncInc()
-        Producer.Message(new ProducerRecord[Array[Byte], String]("topic2", msg.value), msg.committableOffset)
+        Producer.Message(new ProducerRecord[Array[Byte], String]("test", msg.value), msg.committableOffset)
       }
     }
     val work = Flow[In].map { i => i } // a dummy step where real "work" would happen
