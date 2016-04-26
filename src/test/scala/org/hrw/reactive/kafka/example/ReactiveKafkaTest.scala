@@ -58,28 +58,26 @@ object ConsumerGraphExample extends App{
   def reset() = count = 0
   def syncInc() = this.synchronized {
     count += 1
+    println(s"[$id] Time ($count): " + (count / ((System.currentTimeMillis() - now) / 1000)) + " TPS")
   }
   val settings =  consumerSettings.withAssignment(new TopicPartition("test", 0))
 
   val graph = RunnableGraph.fromGraph(GraphDSL.create() { implicit builder: GraphDSL.Builder[akka.NotUsed] =>
     import GraphDSL.Implicits._
-    type In = Consumer.Message[Array[Byte], String]
+    type In = Consumer.CommittableMessage[Array[Byte], String]
 
-    val src = Consumer.atMostOnceSource(settings.withClientId("client" + id))
+    val src = Consumer.committableSource(settings.withClientId("client" + id))
     val commit = Flow[In].mapAsync(1) { msg =>
 
       Future {
 
         syncInc()
-        if (count == num) {
-          println(s"[$id] Time ($count): " + (count / ((System.currentTimeMillis() - now) / 1000)) + " TPS")
-        }
-        Producer.Message(new ProducerRecord[Array[Byte], String]("topic2", msg.value), msg.partitionOffset)
+        Producer.Message(new ProducerRecord[Array[Byte], String]("topic2", msg.value), msg.committableOffset)
       }
     }
     val work = Flow[In].map { i => i } // a dummy step where real "work" would happen
 
-    src ~> work ~> commit ~> Sink.ignore
+    src ~> work ~> commit ~> Producer.commitableSink(producerSettings)
     ClosedShape
   })
   val now = System.currentTimeMillis()
