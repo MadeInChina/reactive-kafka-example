@@ -3,12 +3,11 @@ package org.hrw.reactive.kafka.example
 import java.util.concurrent.LinkedBlockingQueue
 
 import akka.actor.{Actor, ActorSystem, Props}
-import akka.kafka.scaladsl.Consumer.CommittableMessage
+import akka.kafka.scaladsl.Consumer.CommittableOffset
 import akka.kafka.scaladsl.{Consumer, Producer}
 import akka.kafka.{ConsumerSettings, ProducerSettings}
-import akka.pattern._
-import akka.stream.actor.{MaxInFlightRequestStrategy, RequestStrategy, ActorSubscriber}
 import akka.stream.actor.ActorSubscriberMessage.OnNext
+import akka.stream.actor.{ActorSubscriber, MaxInFlightRequestStrategy, RequestStrategy}
 import akka.stream.scaladsl.{Flow, GraphDSL, RunnableGraph, Sink}
 import akka.stream.{ActorMaterializer, ClosedShape, OverflowStrategy}
 import org.apache.kafka.clients.consumer.ConsumerConfig
@@ -105,32 +104,32 @@ object KafkaStream extends App {
   val src = Consumer.committableSource(consumerSettings.withClientId("client-test"))
   src.buffer(1000, OverflowStrategy.backpressure)
 
+
   val finalConsumer = system.actorOf(Props(new Actor {
-    //    val proxy = system.actorOf(StreamConsumerProxy.props)
-//    val work = Flow[In].map { msg =>
-//      println("work data:" + msg)
-//
-//    }
 
-    val commit = Flow[In].mapAsync(1) { msg =>
-      Future {
-        DataWithOffset(msg.value, msg.committableOffset.partitionOffset.offset)
-      }
-    }
+    val proxy = StreamConsumerProxy.props
 
-    val queue = src.via(commit).runWith(Sink.queue())
+    val commit = Flow[In].map { msg =>
+      println("commit msg:" + msg)
+      DataWithOffset(msg.value, msg.committableOffset)
+    }.buffer(1, OverflowStrategy.backpressure)
+
+    val t = src.via(commit).runWith(Sink.actorSubscriber(
+      proxy))
 
     override def receive: Actor.Receive = {
 
-      case Some(a:DataWithOffset)=>
-        println("pulled data:"+a)
-      case Pull(count) =>
-        queue.pull pipeTo self
-      case a@_=>
-        println("Ignore"+a)
+      case Pulled(list) =>
+        println("pulled data:" + list)
+        list.foreach(d => d.offset.commit())
+
+      case Pull(amount) =>
+        t ! Pull(1)
+      case a@_ =>
+        println("Ignore" + a)
     }
   }))
-  Thread.sleep(100)
+  Thread.sleep(1001)
   finalConsumer ! Pull(1)
   finalConsumer ! Pull(1)
   finalConsumer ! Pull(1)
@@ -139,10 +138,10 @@ object KafkaStream extends App {
 }
 
 object StreamConsumerProxy {
-  def props: Props = Props[StreamConsumerProxy]
+  def props(): Props = Props(new StreamConsumerProxy())
 }
 
-class StreamConsumerProxy extends ActorSubscriber {
+class StreamConsumerProxy() extends ActorSubscriber {
   private val buffer = new LinkedBlockingQueue[DataWithOffset](10000)
 
 
@@ -152,9 +151,9 @@ class StreamConsumerProxy extends ActorSubscriber {
   }
 
   override def receive: Actor.Receive = {
-    case OnNext(msg: CommittableMessage[Array[Byte], String]) =>
-      println("OnNext:" + msg.value)
-      buffer.put(DataWithOffset(msg.value,msg.partitionOffset.offset))
+    case OnNext(msg: DataWithOffset) =>
+      println("OnNext:" + msg)
+      buffer.put(msg)
     case Pull(amount) =>
       println("Pull")
       val result = ArrayBuffer[DataWithOffset]()
@@ -165,9 +164,6 @@ class StreamConsumerProxy extends ActorSubscriber {
         }
       }
       sender() ! Pulled(result.toList)
-    case "completeMessage" =>
-      println("completeMessage")
-      sender() ! "completeMessage"
   }
 
   override protected def requestStrategy: RequestStrategy = new MaxInFlightRequestStrategy(max = 100000) {
@@ -175,8 +171,9 @@ class StreamConsumerProxy extends ActorSubscriber {
   }
 }
 
-case class Pull(amount:Int)
+case class Pull(amount: Int)
 
-case class Pulled(data:List[DataWithOffset])
+case class Pulled(data: List[DataWithOffset])
 
-case class DataWithOffset(data: String, offset: Long)
+case class DataWithOffset(data: String, offset: CommittableOffset)
+
