@@ -104,6 +104,12 @@ object KafkaStream extends App {
   val src = Consumer.committableSource(consumerSettings.withClientId("client-test"))
   src.buffer(1000, OverflowStrategy.backpressure)
 
+  val now = System.currentTimeMillis()
+  var count = 0
+  def syncInc() = this.synchronized {
+    count += 1
+    println(s"Time ($count): " + (count / ((System.currentTimeMillis() - now) / 1000)) + " TPS")
+  }
 
   val finalConsumer = system.actorOf(Props(new Actor {
 
@@ -113,6 +119,14 @@ object KafkaStream extends App {
       println("commit msg:" + msg)
       DataWithOffset(msg.value, msg.committableOffset)
     }.buffer(1, OverflowStrategy.backpressure)
+//    val commit = Flow[In].mapAsync(1) { msg =>
+//
+//      Future {
+//
+//        syncInc()
+//        DataWithOffset(msg.value, msg.committableOffset)
+//      }
+//    }.buffer(1, OverflowStrategy.backpressure)
 
     val t = src.via(commit).runWith(Sink.actorSubscriber(
       proxy))
